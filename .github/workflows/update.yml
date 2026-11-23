@@ -1,0 +1,74 @@
+name: Update dashboards
+
+# Runs every hour (minute 7, Malaysia and UTC alike). GitHub can start a scheduled
+# run a few minutes late; that is normal.
+on:
+  schedule:
+    - cron: "7 * * * *"
+  workflow_dispatch: {}        # "Run workflow" button for a manual refresh
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Pull Meta spend and build pages
+        env:
+          META_TOKEN: ${{ secrets.META_TOKEN }}
+        run: python build.py
+
+      - name: Lock each page with its own password
+        env:
+          PW_LSAA: ${{ secrets.PW_LSAA }}
+          PW_CREATORCITY: ${{ secrets.PW_CREATORCITY }}
+        run: |
+          set -e
+          test -n "$PW_LSAA" && test -n "$PW_CREATORCITY"
+          npx --yes staticrypt@3 dist/lsaa/index.html -p "$PW_LSAA" -d dist/lsaa \
+            --short --remember 30 --config false \
+            --template-title "Lemon Sky AI Academy ad spend" \
+            --template-instructions "Enter the password to see the ad spend."
+          npx --yes staticrypt@3 dist/creatorcity/index.html -p "$PW_CREATORCITY" -d dist/creatorcity \
+            --short --remember 30 --config false \
+            --template-title "CreatorCity ad spend" \
+            --template-instructions "Enter the password to see the ad spend."
+          # Safety check: stop if a page was not encrypted.
+          for f in dist/lsaa/index.html dist/creatorcity/index.html; do
+            grep -q "staticrypt" "$f" || { echo "Not encrypted: $f"; exit 1; }
+            if grep -q "MYR [0-9]" "$f"; then echo "Plain figures found in $f"; exit 1; fi
+          done
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

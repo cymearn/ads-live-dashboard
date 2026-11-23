@@ -1,0 +1,22 @@
+{
+  "api_version": "v23.0",
+  "ad_account": "act_1363790602156847",
+  "ad_account_name": "EarlyAdvantageAI",
+  "currency": "MYR",
+  "history_since": "2026-05-01",
+  "local_token_file": "~/meta-ads-tool/config.json",
+  "brands": {
+    "lsaa": {
+      "title": "Lemon Sky AI Academy",
+      "page_id": "911274312078547",
+      "name_prefixes": ["LSAA |", "LSA_"],
+      "accent": "#7ad67a"
+    },
+    "creatorcity": {
+      "title": "CreatorCity",
+      "page_id": "1317432058100647",
+      "name_prefixes": ["CC |"],
+      "accent": "#8fb8ff"
+    }
+  }
+}

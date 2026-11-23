@@ -1,0 +1,5 @@
+dist/
+shot_*.png
+__pycache__/
+*.secrets*
+.DS_Store
