@@ -1,6 +1,6 @@
 # Ads Live Dashboard: owner and operations guide
 
-Two password-protected web pages that show ad spend from Meta Ads and Google Ads, with a total, updated every hour:
+Two password-protected web pages that show ad spend from Meta Ads and Google Ads, with a total, updated every hour. Each page also has a "Meta campaign detail" part: per campaign, the ad sets, funnel, spend by day and where the results came from (platform, placement, country, age and gender, device), plus the Meta account status and amount owed. This is the same data as the old one-off ad set report (`~/meta-ads-tool/build_cc_adset_report.py`), now for every campaign of both brands:
 
 | Page | Shows | Password secret |
 |---|---|---|
@@ -14,8 +14,9 @@ The tool only reads data. It cannot change, pause or start any ad.
 1. Every hour, GitHub Actions (a free robot in GitHub) runs `build.py`.
 2. `build.py` asks the Meta Marketing API for spend on ad account `act_1363790602156847` (EarlyAdvantageAI). It also asks the Google Ads API for spend on the Google account of each brand: LSAA `479-468-6827`, CreatorCity `216-627-2119` (`google_customer_id` in `config.json`).
 3. It sorts each campaign to a brand by its Facebook Page. If a campaign has no Page, it uses the name start (`LSAA |`, `LSA_`, `CC |`). Settings are in `config.json`.
-4. StatiCrypt locks each page with its own password. Only locked pages go online. No spend figure is ever saved in the code or the logs.
-5. GitHub Pages hosts the pages.
+4. `meta_detail.py` builds the campaign detail. A campaign's "result" comes from its biggest ad set's goal (purchases, sign-ups, leads, chats or page views).
+5. StatiCrypt locks each page with its own password. Only locked pages go online. No spend figure is ever saved in the code or the logs.
+6. GitHub Pages hosts the pages.
 
 No computer needs to stay on. Nothing runs on a laptop.
 
