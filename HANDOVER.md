@@ -11,10 +11,11 @@ The tool only reads data. It cannot change, pause or start any ad.
 
 ## How it works
 
-1. Every hour, GitHub Actions (a free robot in GitHub) runs `build.py`.
+1. Every hour (minute 7), a free Cloudflare timer (`cloudflare-trigger/`, worker `ads-dashboard-timer`) asks GitHub to start the update. GitHub Actions (a free robot in GitHub) then runs `build.py`. GitHub's own schedule skips many runs, so it is only a backup, every 3 hours.
 2. `build.py` asks the Meta Marketing API for spend on ad account `act_1363790602156847` (EarlyAdvantageAI). It also asks the Google Ads API for spend on the Google account of each brand: LSAA `479-468-6827`, CreatorCity `216-627-2119` (`google_customer_id` in `config.json`).
 3. It sorts each campaign to a brand by its Facebook Page. If a campaign has no Page, it uses the name start (`LSAA |`, `LSA_`, `CC |`). Settings are in `config.json`.
-4. `meta_detail.py` builds the campaign detail. A campaign's "result" comes from its biggest ad set's goal (purchases, sign-ups, leads, chats or page views).
+4. `page.py` puts each brand's DAILY data (encrypted with the page) into the page. The browser does the sums for the date range picked (quick buttons or From/To dates) and shows one Meta campaign at a time (dropdown, or click a Meta row in the Campaigns table). The range and campaign are kept in the link (`#r=last7&c=<campaign id>`), so a view can be bookmarked. Reach cannot be added up day by day, so it is pulled for the quick ranges only and shows "-" for a custom range.
+   `meta_detail.py` pulls the campaign detail data. A campaign's "result" comes from its biggest ad set's goal (purchases, sign-ups, leads, chats or page views).
 5. StatiCrypt locks each page with its own password. Only locked pages go online. No spend figure is ever saved in the code or the logs.
 6. GitHub Pages hosts the pages.
 
@@ -28,6 +29,8 @@ No computer needs to stay on. Nothing runs on a laptop.
 | `META_TOKEN` | Repository > Settings > Secrets and variables > Actions | System user token from the Meta business portfolio |
 | `PW_LSAA`, `PW_CREATORCITY` | Same place | The page passwords |
 | `GOOGLE_ADS_DEVELOPER_TOKEN`, `GOOGLE_ADS_CLIENT_ID`, `GOOGLE_ADS_CLIENT_SECRET`, `GOOGLE_ADS_REFRESH_TOKEN`, `GOOGLE_ADS_LOGIN_CUSTOMER_ID` | Same place | Google Ads API keys. The refresh token belongs to the Google login that made it. Replace it with one from a company login before that person leaves (see below) |
+| Cloudflare account + worker `ads-dashboard-timer` | dash.cloudflare.com > Workers | A company Cloudflare account |
+| `GH_TOKEN` (Cloudflare worker secret) | Cloudflare > worker > Settings > Variables | GitHub fine-grained token, Actions read and write on this repository only. It expires: make a new one before the date shown in GitHub |
 | Meta system user | Meta Business Settings, portfolio Lemon Sky AI Academy (`737168432518874`) > System users | The company portfolio (it already does) |
 
 The Meta token belongs to a system user in the company portfolio, not to a person. It does not expire. It keeps working when people leave.
@@ -43,8 +46,9 @@ The Google refresh token is different: it belongs to the person who made it. If 
 5. Open Actions > "Update dashboards" > Run workflow. Wait for a green tick.
 6. The web address changes to `https://<organisation>.github.io/ads-live-dashboard/`. Send the new links to the people who use them.
 7. Change the passwords (see below) and send the new ones.
-8. Make a new Google refresh token from a company login (see "Change the Google keys") and paste it into `GOOGLE_ADS_REFRESH_TOKEN`.
-9. Remove the old owner from the organisation and from the Meta system user, if needed.
+8. Cloudflare timer: change `GH_REPO` in `cloudflare-trigger/wrangler.toml` to the new owner, make a new GitHub token for the new repository, then run `cloudflare-trigger/setup_timer.sh` from a company Cloudflare login.
+9. Make a new Google refresh token from a company login (see "Change the Google keys") and paste it into `GOOGLE_ADS_REFRESH_TOKEN`.
+10. Remove the old owner from the organisation and from the Meta system user, if needed.
 
 ## Daily tasks
 
@@ -73,7 +77,7 @@ The page shows a red warning when it is more than 3 hours old.
 1. Open the repository > Actions. Look at the last "Update dashboards" run.
 2. Red cross with "Graph HTTP 190": the Meta token is wrong or was removed. Make a new token (see above).
 3. Red cross with "Graph HTTP 17" or "613": Meta rate limit. It usually fixes itself on the next run.
-4. No runs for days: Actions > "Update dashboards" > Enable workflow. The monthly "Keep schedule alive" job normally stops this.
+4. No runs for hours: check the Cloudflare timer (dash.cloudflare.com > Workers > ads-dashboard-timer > Logs). "GitHub said 401" = the GitHub token expired; make a new one and run `npx wrangler@4 secret put GH_TOKEN` in `cloudflare-trigger/`. No runs for days: Actions > "Update dashboards" > Enable workflow. The monthly "Keep schedule alive" job normally stops this.
 5. Red cross at "Lock each page": a password secret is empty. Add it again.
 6. Red banner "Google figures could not be read this hour" on the page: the Google part failed, Meta still shows. Look in the run log for "Google pull failed". `invalid_grant` = the refresh token is dead, make a new one (see above). Other errors usually fix themselves on the next run.
 

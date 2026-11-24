@@ -27,6 +27,7 @@ import urllib.parse
 import urllib.request
 
 import meta_detail
+import page
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CFG = json.load(open(os.path.join(HERE, "config.json")))
@@ -348,108 +349,6 @@ svg text{fill:#9aa0aa;font-size:11px}.foot{color:#7d838d;font-size:12px;margin-t
 """
 
 
-def money(v, cur):
-    return "%s %s" % (cur, "{:,.2f}".format(v))
-
-
-def bars(daily, cur, acc):
-    days = [TODAY - dt.timedelta(days=i) for i in range(29, -1, -1)]
-    vals = [daily.get(d, 0.0) for d in days]
-    top = max(vals) or 1.0
-    W, H, pad = 740, 220, 28
-    bw = (W - pad - 20) / len(days)
-    out = ['<svg viewBox="0 0 %d %d" width="100%%" role="img" aria-label="Daily spend, last 30 days">' % (W, H + 24)]
-    for f in (0.5, 1.0):
-        y = H - (H - 16) * f
-        out.append('<line x1="%d" x2="%d" y1="%.1f" y2="%.1f" stroke="#262a33"/>' % (pad, W, y, y))
-        out.append('<text x="0" y="%.1f">%s</text>' % (y + 4, "{:,.0f}".format(top * f)))
-    for i, (d, v) in enumerate(zip(days, vals)):
-        h = (H - 16) * v / top
-        x = pad + i * bw + 2
-        col = acc if d == TODAY else "#5d6573" if v else "#262a33"
-        out.append('<rect x="%.1f" y="%.1f" width="%.1f" height="%.1f" rx="2" fill="%s">'
-                   '<title>%s: %s%s</title></rect>' % (
-                       x, H - max(h, 1), bw - 4, max(h, 1), col, d.strftime("%a %d %b"),
-                       money(v, cur), " (today so far)" if d == TODAY else ""))
-        if i % 5 == 4 or d == TODAY:
-            out.append('<text x="%.1f" y="%d" text-anchor="middle">%s</text>' % (
-                x + (bw - 4) / 2, H + 18, d.strftime("%d %b")))
-    out.append("</svg>")
-    return "".join(out)
-
-
-def render(key, data, gerr=None, detail=None):
-    b = CFG["brands"][key]
-    cur = CFG["currency"]
-    e = html.escape
-    t = data["tot"]
-    kp = [("Today so far", t["today"], "updates every hour", True),
-          ("Yesterday", t["yday"], (TODAY - dt.timedelta(days=1)).strftime("%a %d %b"), False),
-          ("Last 7 days", t["d7"], "including today", False),
-          ("This month", t["month"], TODAY.strftime("%B %Y"), False),
-          ("All time", t["life"], "since " + dt.date.fromisoformat(CFG["history_since"]).strftime("%d %b %Y"), False)]
-    kpis = "".join('<div class="kpi%s"><div class="l">%s</div><div class="v">%s</div><div class="s">%s</div></div>'
-                   % (" hi" if hi else "", l, money(v, cur), s) for l, v, s, hi in kp)
-    rows = []
-    for r in data["table"]:
-        tag = '<span class="tag on">LIVE</span>' if r["running"] else '<span class="tag pz">OFF</span>'
-        res = ("%s %s" % ("{:,}".format(r["res"]), r["lab"])) if r["lab"] else "-"
-        rows.append("<tr class='%s'><td>%s%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td>"
-                    "<td>%s</td><td>%s</td><td>%s</td></tr>" % (
-                        "" if r["running"] else "off", tag, e(r["name"]), r["channel"],
-                        money(r["budget"], cur) if r["running"] and r["budget"] else "-",
-                        money(r["today"], cur), money(r["yday"], cur), money(r["d7"], cur),
-                        money(r["month"], cur), money(r["life"], cur), res))
-    if not rows:
-        rows.append("<tr><td colspan='9'>No campaigns with spend yet.</td></tr>")
-    foot = ("<tfoot><tr><td>Total</td><td></td><td></td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td></td></tr></tfoot>"
-            % tuple(money(t[k], cur) for k in ("today", "yday", "d7", "month", "life")))
-    mrows = "".join("<tr><td>%s</td><td>%s</td></tr>" % (
-        dt.date(y, m, 1).strftime("%b %Y"), money(v, cur))
-        for (y, m), v in sorted(data["months"].items(), reverse=True) if v > 0) \
-        or "<tr><td colspan='2'>No spend yet.</td></tr>"
-    ch = data["by_ch"]
-    chrows = "".join("<tr><td>%s</td><td>%d</td>%s</tr>" % (
-        n, ch[n]["live"], "".join("<td>%s</td>" % money(ch[n][k], cur)
-                                 for k in ("today", "yday", "d7", "month", "life")))
-        for n in ("Meta", "Google"))
-    chrows += "<tr class='sum'><td>Total</td><td>%d</td>%s</tr>" % (
-        data["running"], "".join("<td>%s</td>" % money(t[k], cur)
-                                for k in ("today", "yday", "d7", "month", "life")))
-    gwarn = ('<div class="stale" style="display:block">Google figures could not be read this hour. '
-             'The numbers on this page show Meta only until the next update.</div>') if gerr else ""
-    det = detail or {"line": "", "warn": "", "secs": ""}
-    stamp_iso = NOW.isoformat()
-    return """<!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow">
-<title>%(title)s ad spend</title><style>:root{--acc:%(acc)s}%(css)s%(dcss)s</style></head><body><div class="wrap">
-<header><h1><small>Ad spend: Meta + Google</small>%(title)s</h1>
-<div class="stamp">Updated <b>%(stamp)s</b> (Malaysia time)<br>%(running)d campaign(s) live now<br>%(mline)s</div></header>
-<div class="stale" id="stale">This page has not updated for more than 3 hours. The numbers can be old. See HANDOVER.md, section "If the page stops updating".</div>
-%(mwarn)s%(gwarn)s<div class="kpis">%(kpis)s</div>
-<div class="card scroll"><h2>By channel</h2><table><thead><tr><th>Channel</th><th>Live campaigns</th><th>Today</th>
-<th>Yesterday</th><th>Last 7 days</th><th>This month</th><th>All time</th></tr></thead><tbody>%(chrows)s</tbody></table></div>
-<div class="grid2"><div class="card"><h2>Daily spend, last 30 days</h2>%(bars)s</div>
-<div class="card"><h2>Spend by month</h2><table><tbody>%(mrows)s</tbody></table></div></div>
-<div class="card scroll"><h2>Campaigns</h2><table><thead><tr><th>Campaign</th><th>Channel</th><th>Daily budget</th><th>Today</th>
-<th>Yesterday</th><th>Last 7 days</th><th>This month</th><th>All time</th><th>Results (all time)</th></tr></thead>
-<tbody>%(rows)s</tbody>%(foot)s</table></div>
-%(secs)s
-<p class="foot">Sources (read-only): Meta Marketing API, ad account %(acct_name)s; Google Ads API, account %(gcid)s.
-Amounts in %(cur)s, before tax. Today is not final: Meta can add spend for a few hours after midnight, and
-Google figures can run about 3 hours behind. Results use each platform's own count (Meta: leads, sign-ups or
-chats; Google: conversions); the CRM or Stripe stays the true record.</p>
-</div><script>if(Date.now()-new Date("%(iso)s").getTime()>3*3600e3)document.getElementById("stale").style.display="block"</script>
-</body></html>""" % {"title": e(b["title"]), "acc": b["accent"], "css": CSS, "kpis": kpis,
-                     "stamp": NOW.strftime("%a %d %b %Y, %H:%M"), "running": data["running"],
-                     "bars": bars(data["daily"], cur, b["accent"]), "mrows": mrows,
-                     "rows": "".join(rows), "foot": foot, "cur": cur,
-                     "acct_name": e(CFG["ad_account_name"]), "iso": stamp_iso, "gwarn": gwarn, "chrows": chrows,
-                     "mwarn": det["warn"], "mline": det["line"], "secs": det["secs"], "dcss": meta_detail.CSS,
-                     "gcid": "%s-%s-%s" % (b["google_customer_id"][:3], b["google_customer_id"][3:6],
-                                           b["google_customer_id"][6:]) if b.get("google_customer_id") else "none"}
-
-
 def landing():
     links = "".join('<li><a href="%s/">%s</a></li>' % (k, html.escape(b["title"]))
                     for k, b in CFG["brands"].items())
@@ -462,7 +361,6 @@ def landing():
 def main():
     camps, sets, ads, rows, det = pull()
     rtypes = meta_detail.result_types(sets, det["ad_life"])
-    acct_ok = int(det["account"].get("account_status") or 0) == 1
     mline, mwarn = meta_detail.account_banner(det["account"], CFG["currency"])
     pm = page_of_campaign(sets, ads)
     gerr, gall = None, {}
@@ -474,18 +372,13 @@ def main():
     os.makedirs(os.path.join(HERE, "dist"), exist_ok=True)
     for key in CFG["brands"]:
         data = build_brand(key, camps, sets, pm, rows, gall.get(key), rtypes)
-        mine = sorted((c for c in camps if brand_of(c, pm) == key),
-                      key=lambda c: -next((t["life"] for t in data["table"] if t.get("id") == c["id"]), 0))
-        live_ids = {t["id"] for t in data["table"] if t.get("id") and t["running"]}
-        secs = "".join(meta_detail.campaign_section(c, sets, det, rtypes.get(c["id"]), acct_ok,
-                                                    c["id"] in live_ids, CFG["currency"], TODAY) for c in mine)
-        if secs:
-            secs = ("<h2 class='sect'>Meta campaign detail</h2>" + secs + meta_detail.NOTES)
-        detail = {"line": mline, "warn": mwarn, "secs": secs}
+        mine = [c for c in camps if brand_of(c, pm) == key]
+        D = page.brand_data(key, CFG, data["table"], mine, sets, rows, det, gall.get(key), rtypes,
+                            mline, mwarn, gerr, NOW, TODAY)
         out = os.path.join(HERE, "dist", key)
         os.makedirs(out, exist_ok=True)
         with open(os.path.join(out, "index.html"), "w") as f:
-            f.write(render(key, data, gerr if CFG["brands"][key].get("google_customer_id") else None, detail))
+            f.write(page.html_page(D, CSS))
         # Safe to print: counts only, no spend figures in public logs.
         print("%s: %d campaigns on page, %d live (Google: %s)" % (
             key, len(data["table"]), data["running"], "error" if gerr else "ok"))

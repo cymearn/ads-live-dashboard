@@ -1,0 +1,11 @@
+name = "ads-dashboard-timer"
+main = "worker.js"
+compatibility_date = "2026-11-01"
+workers_dev = false   # no web address needed; the timer works without one
+
+[triggers]
+crons = ["7 * * * *"]
+
+[vars]
+# Change this after the repository moves to the company organisation.
+GH_REPO = "cymearn/ads-live-dashboard"

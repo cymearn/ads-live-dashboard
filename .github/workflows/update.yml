@@ -1,10 +1,11 @@
 name: Update dashboards
 
-# Runs every hour (minute 7, Malaysia and UTC alike). GitHub can start a scheduled
-# run a few minutes late; that is normal.
+# Started every hour (minute 7) by the Cloudflare timer in cloudflare-trigger/,
+# because GitHub's own schedule skips many runs. GitHub's schedule stays as a backup
+# every 3 hours (minute 37), so the page still updates if the timer stops.
 on:
   schedule:
-    - cron: "7 * * * *"
+    - cron: "37 */3 * * *"
   workflow_dispatch: {}        # "Run workflow" button for a manual refresh
   push:
     branches: [main]
