@@ -22,6 +22,7 @@ import html
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -57,14 +58,30 @@ def graph(path, **params):
     return graph_url(url)
 
 
-def graph_url(url):
-    try:
-        with urllib.request.urlopen(url, timeout=90) as r:
-            return json.load(r)
-    except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8", "ignore")
-        # Never print the URL: it carries the token.
-        raise RuntimeError("Graph HTTP %s: %s" % (e.code, body[:300])) from None
+RETRY_CODES = {1, 2, 4, 32, 613}                 # Meta "try again" errors (not bad token, not bad request)
+
+
+def graph_url(url, tries=3):
+    for n in range(tries):
+        try:
+            with urllib.request.urlopen(url, timeout=120) as r:
+                return json.load(r)
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", "ignore")
+            try:
+                code = json.loads(body)["error"].get("code")
+            except (ValueError, KeyError, AttributeError):
+                code = None
+            if code in RETRY_CODES and n < tries - 1:
+                time.sleep(20 * (n + 1))
+                continue
+            # Never print the URL: it carries the token.
+            raise RuntimeError("Graph HTTP %s: %s" % (e.code, body[:300])) from None
+        except (urllib.error.URLError, TimeoutError) as e:
+            if n < tries - 1:
+                time.sleep(20 * (n + 1))
+                continue
+            raise RuntimeError("Graph network error: %s" % str(e)[:200]) from None
 
 
 def graph_all(path, **params):
@@ -90,7 +107,13 @@ def pull():
                      fields="campaign_id,spend,impressions,clicks,actions",
                      time_range=json.dumps({"since": CFG["history_since"],
                                             "until": TODAY.isoformat()}))
-    det = meta_detail.pull(graph, graph_all, acct, CFG["history_since"], TODAY.isoformat())
+    try:
+        det = meta_detail.pull(graph, graph_all, acct, CFG["history_since"], TODAY.isoformat())
+    except Exception as ex:                       # spend still publishes; detail shows a warning
+        print("Meta detail pull failed: %s" % str(ex)[:200])
+        det = {"account": graph(acct, fields="account_status,balance,currency"), "ad_life": [],
+               "ad_daily": [], "bds": {t: [] for t, _, _ in meta_detail.BREAKDOWNS},
+               "reach": {}, "error": True}
     return camps, sets, ads, rows, det
 
 

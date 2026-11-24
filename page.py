@@ -125,7 +125,7 @@ def brand_data(key, cfg, brand_table, camps, sets, rows, det, gdata, rtypes, acc
             "acctLine": acct_line, "acctWarn": acct_warn, "acctOk": "Active</b>" in acct_line,
             "gerr": bool(gerr and gcid), "acctName": cfg["ad_account_name"],
             "gcid": "%s-%s-%s" % (gcid[:3], gcid[3:6], gcid[6:]) if gcid else "none",
-            "camps": cl, "cd": cd, "as": al, "ad": ad, "rc": rc, "bd": bd,
+            "detErr": bool(det.get("error")), "camps": cl, "cd": cd, "as": al, "ad": ad, "rc": rc, "bd": bd,
             "labels": {SHORT[t]: l for t, l in md.FUNNEL}}
 
 
@@ -414,7 +414,7 @@ def html_page(D, base_css):
 <th>Spend</th><th>Impressions</th><th>Clicks</th><th>CTR</th><th>Cost per click</th><th>Results</th><th>Cost per result</th></tr></thead>
 <tbody id="camps-b"></tbody></table></div>
 <div class="selbar" id="detailtop"><h2 class="sect">Meta campaign detail</h2><select id="campsel" aria-label="Campaign"></select><span class="selcount" id="selcount"></span></div>
-<div id="detail"></div>
+%(derr)s<div id="detail"></div>
 %(notes)s
 <p class="foot">Sources (read-only): Meta Marketing API, ad account %(acct)s; Google Ads API, account %(gcid)s.
 Amounts in %(cur)s, before tax. Today is not final: Meta can add spend for a few hours after midnight, and
@@ -425,7 +425,9 @@ or Stripe stays the true record.</p>
 <script>%(js)s</script></body></html>""" % {
         "title": e(D["title"]), "acc": D["acc"], "css": base_css + md.CSS + CSS_EXTRA, "stamp": D["stamp"],
         "running": sum(1 for c in D["camps"] if c["run"]), "mline": D["acctLine"], "mwarn": D["acctWarn"],
-        "gwarn": gwarn, "buttons": buttons, "notes": NOTES, "acct": e(D["acctName"]), "gcid": D["gcid"],
+        "gwarn": gwarn, "buttons": buttons,
+        "derr": ('<div class="stale" style="display:block">Meta campaign detail could not be read this hour. '
+                 'Spend above is up to date. The detail comes back on the next update.</div>') if D["detErr"] else "", "notes": NOTES, "acct": e(D["acctName"]), "gcid": D["gcid"],
         "cur": D["cur"], "data": data,
         "js": JS.replace("document.getElementById('camps').innerHTML = campTable(tots);",
                          "{const h = campTable(tots); const t = document.getElementById('camps-t'); "
