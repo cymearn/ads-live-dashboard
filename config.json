@@ -9,14 +9,25 @@
     "lsaa": {
       "title": "Lemon Sky AI Academy",
       "page_id": "911274312078547",
-      "name_prefixes": ["LSAA |", "LSA_"],
-      "accent": "#7ad67a"
+      "name_prefixes": [
+        "LSAA |",
+        "LSA_"
+      ],
+      "accent": "#7ad67a",
+      "google_customer_id": "4794686827"
     },
     "creatorcity": {
       "title": "CreatorCity",
       "page_id": "1317432058100647",
-      "name_prefixes": ["CC |"],
-      "accent": "#8fb8ff"
+      "name_prefixes": [
+        "CC |"
+      ],
+      "accent": "#8fb8ff",
+      "google_customer_id": "2166272119"
     }
+  },
+  "google": {
+    "api_version": "v24",
+    "local_config_file": "~/google-ads-tool/google-ads.yaml"
   }
 }

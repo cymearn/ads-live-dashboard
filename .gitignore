@@ -4,3 +4,4 @@ __pycache__/
 *.secrets*
 .DS_Store
 setup_github.sh
+set_google_secrets.sh

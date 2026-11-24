@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Ads Live Dashboard: builds one spend page per brand from the Meta Marketing API.
+Ads Live Dashboard: builds one spend page per brand from the Meta Marketing API
+and the Google Ads API (spend from both channels, plus a combined total).
 
 Read-only. Never changes anything in the ad account.
 
@@ -115,12 +116,126 @@ def brand_of(camp, page_map):
     return None
 
 
+# ------------------------------------------------------------------ google
+GOOGLE_KEYS = ("developer_token", "client_id", "client_secret", "refresh_token", "login_customer_id")
+
+
+def google_creds():
+    """Google Ads API keys from env (GitHub secrets), else the local google-ads.yaml."""
+    env = {k: os.environ.get("GOOGLE_ADS_" + k.upper(), "").strip() for k in GOOGLE_KEYS}
+    if all(env.values()):
+        return env
+    local = os.path.expanduser(CFG["google"].get("local_config_file", ""))
+    if local and os.path.exists(local):
+        got = {}
+        for line in open(local):
+            line = line.split("#", 1)[0]
+            if ":" in line:
+                k, v = line.split(":", 1)
+                got[k.strip()] = v.strip().strip("'\"")
+        if all(got.get(k) for k in GOOGLE_KEYS):
+            return {k: got[k] for k in GOOGLE_KEYS}
+    raise RuntimeError("No Google Ads keys. Set the GOOGLE_ADS_* secrets.")
+
+
+def http_json(url, data=None, headers=None):
+    req = urllib.request.Request(url, data=data, headers=headers or {})
+    try:
+        with urllib.request.urlopen(req, timeout=90) as r:
+            return json.load(r)
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", "ignore")
+        raise RuntimeError("Google HTTP %s: %s" % (e.code, body[:300])) from None
+
+
+def google_pull():
+    """Read-only. Returns {brand: (campaigns, daily rows)} for brands with a Google account."""
+    cr = google_creds()
+    tok = http_json("https://oauth2.googleapis.com/token", data=urllib.parse.urlencode({
+        "client_id": cr["client_id"], "client_secret": cr["client_secret"],
+        "refresh_token": cr["refresh_token"], "grant_type": "refresh_token"}).encode())["access_token"]
+    hdr = {"Authorization": "Bearer " + tok, "developer-token": cr["developer_token"],
+           "login-customer-id": cr["login_customer_id"].replace("-", ""),
+           "Content-Type": "application/json"}
+    base = "https://googleads.googleapis.com/%s/customers/%%s/googleAds:searchStream" % CFG["google"]["api_version"]
+
+    def gaql(cid, q):
+        out = []
+        for batch in http_json(base % cid, data=json.dumps({"query": q}).encode(), headers=hdr):
+            out += batch.get("results", [])
+        return out
+
+    res = {}
+    for key, b in CFG["brands"].items():
+        cid = b.get("google_customer_id")
+        if not cid:
+            continue
+        cur = gaql(cid, "SELECT customer.currency_code FROM customer")[0]["customer"]["currencyCode"]
+        if cur != CFG["currency"]:
+            raise RuntimeError("Google account %s is in %s, not %s" % (cid, cur, CFG["currency"]))
+        camps = gaql(cid, "SELECT campaign.id, campaign.name, campaign.status, campaign.end_date_time, "
+                          "campaign_budget.amount_micros FROM campaign WHERE campaign.status != 'REMOVED'")
+        rows = gaql(cid, "SELECT campaign.id, segments.date, metrics.cost_micros, metrics.impressions, "
+                         "metrics.clicks, metrics.conversions FROM campaign WHERE segments.date BETWEEN "
+                         "'%s' AND '%s' AND metrics.impressions > 0" % (CFG["history_since"], TODAY.isoformat()))
+        res[key] = (camps, rows)
+    return res
+
+
+def google_table(camps, rows):
+    """Same row shape as the Meta table, plus the daily spend map."""
+    yday = TODAY - dt.timedelta(days=1)
+    d7_start = TODAY - dt.timedelta(days=6)
+    per, daily = {}, {}
+    for r in rows:
+        cid = r["campaign"]["id"]
+        day = dt.date.fromisoformat(r["segments"]["date"])
+        m = r.get("metrics", {})
+        sp = int(m.get("costMicros") or 0) / 1e6
+        daily[day] = daily.get(day, 0.0) + sp
+        p = per.setdefault(cid, {"today": 0.0, "yday": 0.0, "d7": 0.0, "month": 0.0, "life": 0.0,
+                                 "impr": 0, "clicks": 0, "conv": 0.0})
+        p["life"] += sp
+        p["impr"] += int(m.get("impressions") or 0)
+        p["clicks"] += int(m.get("clicks") or 0)
+        p["conv"] += float(m.get("conversions") or 0)
+        if day == TODAY:
+            p["today"] += sp
+        if day == yday:
+            p["yday"] += sp
+        if day >= d7_start:
+            p["d7"] += sp
+        if day.year == TODAY.year and day.month == TODAY.month:
+            p["month"] += sp
+    table = []
+    for c in camps:
+        cp = c["campaign"]
+        p = per.get(cp["id"], {"today": 0.0, "yday": 0.0, "d7": 0.0, "month": 0.0, "life": 0.0,
+                               "impr": 0, "clicks": 0, "conv": 0.0})
+        end = cp.get("endDateTime", "")
+        ended = False
+        if end:
+            try:
+                ended = dt.datetime.strptime(end[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=MYT) < NOW
+            except ValueError:
+                pass
+        running = cp.get("status") == "ENABLED" and not ended
+        if p["life"] == 0 and not running:
+            continue
+        budget = int((c.get("campaignBudget") or {}).get("amountMicros") or 0) / 1e6
+        conv = int(round(p["conv"]))
+        table.append({"name": cp["name"], "channel": "Google", "running": running, "budget": budget,
+                      "res": conv, "lab": "conversions" if p["conv"] else "",
+                      **{k: p[k] for k in ("today", "yday", "d7", "month", "life", "impr", "clicks")}})
+    return table, daily
+
+
 RESULT_TYPES = [("lead", "leads"), ("complete_registration", "sign-ups"),
                 ("onsite_conversion.messaging_conversation_started_7d", "chats"),
                 ("landing_page_view", "page views")]
 
 
-def build_brand(key, camps, sets, page_map, rows):
+def build_brand(key, camps, sets, page_map, rows, gdata=None):
     mine = {c["id"]: c for c in camps if brand_of(c, page_map) == key}
     daily = {}                                    # date -> spend
     per = {cid: {"today": 0.0, "yday": 0.0, "d7": 0.0, "month": 0.0, "life": 0.0,
@@ -171,16 +286,26 @@ def build_brand(key, camps, sets, page_map, rows):
                 break
         if p["life"] == 0 and not running:
             continue
-        table.append({"name": c["name"], "running": running, "budget": budget,
+        table.append({"name": c["name"], "channel": "Meta", "running": running, "budget": budget,
                       "res": res, "lab": lab, **{k: p[k] for k in
                       ("today", "yday", "d7", "month", "life", "impr", "clicks")}})
+    if gdata is not None:
+        gtable, gdaily = google_table(*gdata)
+        table += gtable
+        for d, sp in gdaily.items():
+            daily[d] = daily.get(d, 0.0) + sp
     table.sort(key=lambda t: (not t["running"], -t["d7"], -t["life"]))
 
-    tot = {k: sum(t[k] for t in table) for k in ("today", "yday", "d7", "month", "life")}
+    keys = ("today", "yday", "d7", "month", "life")
+    tot = {k: sum(t[k] for t in table) for k in keys}
+    by_ch = {ch: {k: sum(t[k] for t in table if t["channel"] == ch) for k in keys}
+             for ch in ("Meta", "Google")}
+    by_ch["Meta"]["live"] = sum(1 for t in table if t["channel"] == "Meta" and t["running"])
+    by_ch["Google"]["live"] = sum(1 for t in table if t["channel"] == "Google" and t["running"])
     months = {}
     for d, sp in daily.items():
         months[(d.year, d.month)] = months.get((d.year, d.month), 0.0) + sp
-    return {"table": table, "tot": tot, "daily": daily, "months": months,
+    return {"table": table, "tot": tot, "daily": daily, "months": months, "by_ch": by_ch,
             "running": sum(1 for t in table if t["running"])}
 
 
@@ -204,13 +329,13 @@ color:var(--acc);margin-bottom:8px}
 .card{background:#171a21;border:1px solid #262a33;border-radius:12px;padding:20px 22px;margin-bottom:22px}
 .card h2{margin:0 0 14px;font-size:16px;font-weight:600}
 .grid2{display:grid;grid-template-columns:2fr 1fr;gap:22px}
-table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
-th,td{padding:9px 10px;text-align:right;border-bottom:1px solid #232730;white-space:nowrap}
-th{color:#9aa0aa;font-weight:500;font-size:12px;text-transform:uppercase;letter-spacing:.06em}
-th:first-child,td:first-child{text-align:left;white-space:normal;min-width:250px}
+table{width:100%;border-collapse:collapse;font-size:14px;font-variant-numeric:tabular-nums}
+th,td{padding:9px 7px;text-align:right;border-bottom:1px solid #232730;white-space:nowrap}
+th{color:#9aa0aa;font-weight:500;font-size:11px;text-transform:uppercase;letter-spacing:.06em}
+th:first-child,td:first-child{text-align:left;white-space:normal;min-width:190px}.scroll{overflow-x:auto}
 tr.off td{color:#8a909a}.tag{display:inline-block;font-size:11px;padding:2px 8px;border-radius:99px;
 margin-right:8px;font-weight:600}.on{background:var(--acc);color:#0f1115}.pz{background:#2a2e38;color:#9aa0aa}
-tfoot td{font-weight:700;border-top:1px solid #3a3f4a;border-bottom:0}
+tr.sum td{font-weight:700;border-top:1px solid #3a3f4a}tfoot td{font-weight:700;border-top:1px solid #3a3f4a;border-bottom:0}
 svg text{fill:#9aa0aa;font-size:11px}.foot{color:#7d838d;font-size:12px;margin-top:30px}
 @media(max-width:860px){.kpis{grid-template-columns:repeat(2,1fr)}.grid2{grid-template-columns:1fr}
 .scroll{overflow-x:auto}h1{font-size:28px}}
@@ -247,7 +372,7 @@ def bars(daily, cur, acc):
     return "".join(out)
 
 
-def render(key, data):
+def render(key, data, gerr=None):
     b = CFG["brands"][key]
     cur = CFG["currency"]
     e = html.escape
@@ -263,42 +388,57 @@ def render(key, data):
     for r in data["table"]:
         tag = '<span class="tag on">LIVE</span>' if r["running"] else '<span class="tag pz">OFF</span>'
         res = ("%s %s" % ("{:,}".format(r["res"]), r["lab"])) if r["lab"] else "-"
-        rows.append("<tr class='%s'><td>%s%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td>"
+        rows.append("<tr class='%s'><td>%s%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td>"
                     "<td>%s</td><td>%s</td><td>%s</td></tr>" % (
-                        "" if r["running"] else "off", tag, e(r["name"]),
+                        "" if r["running"] else "off", tag, e(r["name"]), r["channel"],
                         money(r["budget"], cur) if r["running"] and r["budget"] else "-",
                         money(r["today"], cur), money(r["yday"], cur), money(r["d7"], cur),
                         money(r["month"], cur), money(r["life"], cur), res))
     if not rows:
-        rows.append("<tr><td colspan='8'>No campaigns with spend yet.</td></tr>")
-    foot = ("<tfoot><tr><td>Total</td><td></td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td></td></tr></tfoot>"
+        rows.append("<tr><td colspan='9'>No campaigns with spend yet.</td></tr>")
+    foot = ("<tfoot><tr><td>Total</td><td></td><td></td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td></td></tr></tfoot>"
             % tuple(money(t[k], cur) for k in ("today", "yday", "d7", "month", "life")))
     mrows = "".join("<tr><td>%s</td><td>%s</td></tr>" % (
         dt.date(y, m, 1).strftime("%b %Y"), money(v, cur))
         for (y, m), v in sorted(data["months"].items(), reverse=True) if v > 0) \
         or "<tr><td colspan='2'>No spend yet.</td></tr>"
+    ch = data["by_ch"]
+    chrows = "".join("<tr><td>%s</td><td>%d</td>%s</tr>" % (
+        n, ch[n]["live"], "".join("<td>%s</td>" % money(ch[n][k], cur)
+                                 for k in ("today", "yday", "d7", "month", "life")))
+        for n in ("Meta", "Google"))
+    chrows += "<tr class='sum'><td>Total</td><td>%d</td>%s</tr>" % (
+        data["running"], "".join("<td>%s</td>" % money(t[k], cur)
+                                for k in ("today", "yday", "d7", "month", "life")))
+    gwarn = ('<div class="stale" style="display:block">Google figures could not be read this hour. '
+             'The numbers on this page show Meta only until the next update.</div>') if gerr else ""
     stamp_iso = NOW.isoformat()
     return """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow">
 <title>%(title)s ad spend</title><style>:root{--acc:%(acc)s}%(css)s</style></head><body><div class="wrap">
-<header><h1><small>Meta Ads spend</small>%(title)s</h1>
+<header><h1><small>Ad spend: Meta + Google</small>%(title)s</h1>
 <div class="stamp">Updated <b>%(stamp)s</b> (Malaysia time)<br>%(running)d campaign(s) live now</div></header>
 <div class="stale" id="stale">This page has not updated for more than 3 hours. The numbers can be old. See HANDOVER.md, section "If the page stops updating".</div>
-<div class="kpis">%(kpis)s</div>
+%(gwarn)s<div class="kpis">%(kpis)s</div>
+<div class="card scroll"><h2>By channel</h2><table><thead><tr><th>Channel</th><th>Live campaigns</th><th>Today</th>
+<th>Yesterday</th><th>Last 7 days</th><th>This month</th><th>All time</th></tr></thead><tbody>%(chrows)s</tbody></table></div>
 <div class="grid2"><div class="card"><h2>Daily spend, last 30 days</h2>%(bars)s</div>
 <div class="card"><h2>Spend by month</h2><table><tbody>%(mrows)s</tbody></table></div></div>
-<div class="card scroll"><h2>Campaigns</h2><table><thead><tr><th>Campaign</th><th>Daily budget</th><th>Today</th>
+<div class="card scroll"><h2>Campaigns</h2><table><thead><tr><th>Campaign</th><th>Channel</th><th>Daily budget</th><th>Today</th>
 <th>Yesterday</th><th>Last 7 days</th><th>This month</th><th>All time</th><th>Results (all time)</th></tr></thead>
 <tbody>%(rows)s</tbody>%(foot)s</table></div>
-<p class="foot">Source: Meta Marketing API, ad account %(acct_name)s, read-only. Amounts in %(cur)s, before tax.
-Today is not final: Meta can add spend for a few hours after midnight. Results use Meta's own count
-(leads, sign-ups or chats); the CRM or Stripe stays the true record.</p>
+<p class="foot">Sources (read-only): Meta Marketing API, ad account %(acct_name)s; Google Ads API, account %(gcid)s.
+Amounts in %(cur)s, before tax. Today is not final: Meta can add spend for a few hours after midnight, and
+Google figures can run about 3 hours behind. Results use each platform's own count (Meta: leads, sign-ups or
+chats; Google: conversions); the CRM or Stripe stays the true record.</p>
 </div><script>if(Date.now()-new Date("%(iso)s").getTime()>3*3600e3)document.getElementById("stale").style.display="block"</script>
 </body></html>""" % {"title": e(b["title"]), "acc": b["accent"], "css": CSS, "kpis": kpis,
                      "stamp": NOW.strftime("%a %d %b %Y, %H:%M"), "running": data["running"],
                      "bars": bars(data["daily"], cur, b["accent"]), "mrows": mrows,
                      "rows": "".join(rows), "foot": foot, "cur": cur,
-                     "acct_name": e(CFG["ad_account_name"]), "iso": stamp_iso}
+                     "acct_name": e(CFG["ad_account_name"]), "iso": stamp_iso, "gwarn": gwarn, "chrows": chrows,
+                     "gcid": "%s-%s-%s" % (b["google_customer_id"][:3], b["google_customer_id"][3:6],
+                                           b["google_customer_id"][6:]) if b.get("google_customer_id") else "none"}
 
 
 def landing():
@@ -313,15 +453,22 @@ def landing():
 def main():
     camps, sets, ads, rows = pull()
     pm = page_of_campaign(sets, ads)
+    gerr, gall = None, {}
+    try:
+        gall = google_pull()
+    except Exception as ex:                       # Meta still builds; page shows a warning
+        gerr = str(ex)
+        print("Google pull failed: %s" % gerr[:200])
     os.makedirs(os.path.join(HERE, "dist"), exist_ok=True)
     for key in CFG["brands"]:
-        data = build_brand(key, camps, sets, pm, rows)
+        data = build_brand(key, camps, sets, pm, rows, gall.get(key))
         out = os.path.join(HERE, "dist", key)
         os.makedirs(out, exist_ok=True)
         with open(os.path.join(out, "index.html"), "w") as f:
-            f.write(render(key, data))
+            f.write(render(key, data, gerr if CFG["brands"][key].get("google_customer_id") else None))
         # Safe to print: counts only, no spend figures in public logs.
-        print("%s: %d campaigns on page, %d live" % (key, len(data["table"]), data["running"]))
+        print("%s: %d campaigns on page, %d live (Google: %s)" % (
+            key, len(data["table"]), data["running"], "error" if gerr else "ok"))
     with open(os.path.join(HERE, "dist", "index.html"), "w") as f:
         f.write(landing())
     with open(os.path.join(HERE, "dist", ".nojekyll"), "w") as f:
