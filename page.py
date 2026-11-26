@@ -129,6 +129,35 @@ def brand_data(key, cfg, brand_table, camps, sets, rows, det, gdata, rtypes, acc
             "labels": {SHORT[t]: l for t, l in md.FUNNEL}}
 
 
+def ad_previews(ads, det, camp_ids):
+    """Ad previews tab: each ad in this brand's Meta campaigns (picture, text, CTA, status,
+    Meta preview link) plus its spend and actions by day, so the page sums the picked range."""
+    av = []
+    for a in ads:
+        if a.get("campaign_id") not in camp_ids:
+            continue
+        cr = a.get("creative") or {}
+        oss = cr.get("object_story_spec") or {}
+        ld, vd = oss.get("link_data") or {}, oss.get("video_data") or {}
+        afs = cr.get("asset_feed_spec") or {}
+        first = lambda k: ((afs.get(k) or [{}])[0] or {}).get("text", "")
+        cta = (cr.get("call_to_action_type") or (ld.get("call_to_action") or {}).get("type")
+               or (vd.get("call_to_action") or {}).get("type") or "")
+        video = bool(cr.get("video_id") or vd or afs.get("videos"))
+        av.append({"id": a["id"], "c": a["campaign_id"], "s": a.get("adset_id", ""), "n": a.get("name", ""),
+                   "on": a.get("effective_status") == "ACTIVE",
+                   "st": (a.get("effective_status") or "").replace("_", " ").lower(),
+                   "t": cr.get("title") or ld.get("name") or vd.get("title") or first("titles"),
+                   "b": cr.get("body") or ld.get("message") or vd.get("message") or first("bodies"),
+                   "cta": cta.replace("_", " ").capitalize(), "v": video,
+                   "img": cr.get("thumbnail_url") or cr.get("image_url") or vd.get("image_url") or "",
+                   "lk": a.get("preview_shareable_link", "")})
+    keep = {a["id"] for a in av}
+    ai = [[r["ad_id"], r["date_start"], round(float(r.get("spend") or 0), 2), int(r.get("impressions") or 0), acts(r)]
+          for r in det.get("ad_ins", []) if r.get("ad_id") in keep and float(r.get("spend") or 0) > 0]
+    return {"av": av, "ai": ai, "adErr": bool(det.get("adErr"))}
+
+
 CSS_EXTRA = """
 .rangebar{position:sticky;top:0;z-index:5;background:#0f1115ee;backdrop-filter:blur(6px);border:1px solid #262a33;
 border-radius:12px;padding:12px 14px;margin:0 0 22px;display:flex;flex-wrap:wrap;gap:8px;align-items:center}
@@ -137,6 +166,21 @@ border-radius:12px;padding:12px 14px;margin:0 0 22px;display:flex;flex-wrap:wrap
 font:inherit;font-size:13px;cursor:pointer}.rangebar button.sel{background:var(--acc);color:#0f1115;border-color:var(--acc);font-weight:600}
 .rangebar input{background:#171a21;color:#e8eaed;border:1px solid #2f3440;border-radius:8px;padding:5px 8px;font:inherit;font-size:13px;color-scheme:dark}
 .rangebar .custom{display:flex;gap:6px;align-items:center;margin-left:auto;color:#9aa0aa;font-size:13px}
+.vtabs{display:flex;gap:6px;margin-top:16px}.vtab{background:#12151b;color:#c3c8d0;border:1px solid #2f3440;border-radius:99px;
+padding:7px 14px;font:inherit;font-size:13px;cursor:pointer}.vtab.sel{background:var(--acc);border-color:var(--acc);color:#0f1115;font-weight:600}
+.adgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:14px;margin-top:14px}
+.adc{background:#12151b;border:1px solid #262a33;border-radius:10px;overflow:hidden;display:flex;flex-direction:column}
+.adc.live{border-color:var(--acc)}.adimg{position:relative;aspect-ratio:4/5;background:#000}
+.adimg img{width:100%;height:100%;object-fit:contain;display:block}.adimg .ni{display:flex;height:100%;align-items:center;justify-content:center;color:#7d838d;font-size:12px}
+.adimg .vb{position:absolute;top:8px;left:8px;background:#000c;color:#fff;font-size:10px;font-weight:700;letter-spacing:.06em;padding:3px 7px;border-radius:4px}
+.adtx{padding:10px 12px 12px;display:flex;flex-direction:column;gap:5px;font-size:12.5px;flex:1}
+.adtx .an{color:#9aa0aa;font-size:11px;word-break:break-word}.adtx .ah{font-weight:600;font-size:13.5px}
+.adtx .ab{color:#c3c8d0;line-height:1.45}.adtx details summary{cursor:pointer;color:var(--acc);font-size:11.5px}
+.adtx details p{color:#9aa0aa;margin:6px 0 0;line-height:1.5;white-space:pre-line}.adtx .cta{color:#9aa0aa;font-size:11.5px}
+.adnum{display:grid;grid-template-columns:1fr 1fr;gap:4px 10px;margin-top:auto;padding-top:8px;border-top:1px solid #262a33;font-size:12px}
+.adnum span{color:#9aa0aa}.adnum b{font-variant-numeric:tabular-nums}.adnum b.r{color:var(--acc)}
+.adtx a{color:var(--acc);font-weight:600;text-decoration:none;font-size:12.5px;margin-top:4px}
+.offads{margin-top:16px;color:#9aa0aa;font-size:13px}.offads>summary{cursor:pointer}
 .rangenow{color:#9aa0aa;font-size:13px;margin:-12px 0 18px}.rangenow b{color:#e8eaed}
 .glance{color:#9aa0aa;font-size:12px;text-transform:uppercase;letter-spacing:.08em;margin:0 0 8px}
 .empty{color:#9aa0aa;font-size:14px;padding:8px 0}
@@ -191,12 +235,13 @@ function presets(){
 }
 const PR = presets();
 let R = {key:'all', from:D.since, to:T};
-let SEL = null, BD = 'Platform';
+let SEL = null, BD = 'Platform', VIEW = 'num';
 const inR = s => s >= R.from && s <= R.to;
 
 function readHash(){
   const parts = decodeURIComponent(location.hash.slice(1)).split('&');
   const cp = parts.find(p => p.startsWith('c=')); if (cp) SEL = cp.slice(2);
+  if (parts.includes('v=ads')) VIEW = 'ads';
   const h = parts.find(p => p.startsWith('r=')) || '';
   const m = h.match(/^r=(\w+)$/), c = h.match(/^r=(\d{4}-\d\d-\d\d)\.\.(\d{4}-\d\d-\d\d)$/);
   if (c && c[1] <= c[2]) { R = {key:'custom', from:c[1] < D.since ? D.since : c[1], to:c[2] > T ? T : c[2]}; return; }
@@ -329,6 +374,36 @@ function bdTable(title, cid, cols, rt){
   return `<div class='scroll bdpane' data-t='${title}'><table class='dt'><thead><tr><th>${title}</th><th>Spend</th><th>Share of spend</th>${cols.map(k=>`<th>${L[k]}</th>`).join('')}</tr></thead><tbody>${body}${tot}</tbody></table></div>`;
 }
 
+function adCard(x, rt, rl){
+  const r = rt ? (x.a[rt]||0) : 0, lc = x.a.lc||0;
+  const ok = D.acctOk;
+  const pill = x.on && !ok ? '<span class="tag warn">Set to Active, no delivery</span>' : x.on ? '<span class="tag on">LIVE</span>' : `<span class="tag pz">${esc(x.st||'off').toUpperCase()}</span>`;
+  const body = x.b || '', line1 = body.split('\n')[0], short = line1.length > 150 ? line1.slice(0,150).replace(/\s+\S*$/,'') + '…' : line1;
+  const more = body.length > line1.length || line1.length > 150 ? `<details><summary>Full text</summary><p>${esc(body)}</p></details>` : '';
+  const img = x.img ? `<img src="${esc(x.img)}" loading="lazy" alt="" referrerpolicy="no-referrer">` : '<div class="ni">No picture</div>';
+  return `<div class="adc${x.on?' live':''}"><div class="adimg">${img}${x.v?'<span class="vb">VIDEO</span>':''}</div><div class="adtx">`
+    + `<div>${pill}</div><div class="an">${esc(x.n)}</div>${x.t?`<div class="ah">${esc(x.t)}</div>`:''}<div class="ab">${esc(short)}</div>${more}`
+    + `${x.cta?`<div class="cta">Button: ${esc(x.cta)}</div>`:''}`
+    + `<div class="adnum"><span>Spend</span><b>${money(x.sp)}</b><span>Link clicks</span><b>${num(lc)}${x.im?' · '+(lc/x.im*100).toFixed(2)+'%':''}</b>`
+    + `<span class="r">${esc(rl)}</span><b class="r">${rt?num(r):'-'}</b><span>Cost per ${esc(rt?rl.toLowerCase().replace(/s$/,''):'result')}</span><b>${r?money(x.sp/r):'-'}</b></div>`
+    + `${x.lk?`<a href="${esc(x.lk)}" target="_blank" rel="noopener">Open Meta preview &rarr;</a>`:''}</div></div>`;
+}
+function previews(c){
+  const rows = D.av.filter(a => a.c === c.id).map(a => ({...a, on: a.on && c.run, st: a.on && !c.run ? 'campaign ended' : a.st, sp:0, im:0, a:{}}));
+  const idx = Object.fromEntries(rows.map(x => [x.id, x]));
+  for (const r of D.ai) { const x = idx[r[0]]; if (!x || !inR(r[1])) continue;
+    x.sp += r[2]; x.im += r[3]; for (const k in r[4]) x.a[k] = (x.a[k]||0) + r[4][k]; }
+  const rt = c.rt, rl = rt ? L[rt] : 'Results';
+  const show = rows.filter(x => x.on || x.sp > 0).sort((p,q) => (q.on-p.on) || (q.sp-p.sp));
+  const live = show.filter(x => x.on), off = show.filter(x => !x.on);
+  const err = D.adErr ? `<p class='sm'>Per-ad numbers could not be read this hour. They come back on the next update.</p>` : '';
+  if (!show.length) return err + `<p class="empty">No ads with spend in this date range.</p>`;
+  const head = `<p class='sm' style='margin-top:12px'>${live.length} live ad${live.length===1?'':'s'}${off.length?', '+off.length+' off with spend in this range':''}. Numbers follow the date range. Results are ${esc(rl.toLowerCase())}, Meta-counted. "Open Meta preview" shows the ad as people see it on Facebook and Instagram.</p>`;
+  const grid = list => `<div class="adgrid">${list.map(x => adCard(x, rt, rl)).join('')}</div>`;
+  return err + head + (live.length ? grid(live) : '')
+    + (off.length ? `<details class="offads"${live.length?'':' open'}><summary>${off.length} ad${off.length===1?'':'s'} now off (had spend in this range)</summary>${grid(off)}</details>` : '');
+}
+
 function section(c){
   const sets = D.as.filter(a => a.c === c.id);
   const rows = sets.map(a => ({...a, sp:0, im:0, a:{}, days:[]}));
@@ -389,7 +464,11 @@ function section(c){
   const headOn = c.run || (!ok && live.some(x => x.on));
   const bb = (D.budgets||[]).find(b => (b.campaigns||[]).includes(c.id));
   const bline = bb ? `<p class='sm'>Approved budget: <b>${money0(+bb.approved||0)}</b> for ${esc(bb.name)}${bb.released!=null?', released so far '+money0(+bb.released):''}. See Approved budgets at the top.</p>` : `<p class='sm'>No approved budget on record for this campaign.</p>`;
-  return `<div class='card camp one'><div class='chead'><span class='ct'>${pill(headOn)}${esc(c.n)}</span><span class='cm'>${meta}</span></div>${bline}<div class='mks'>${k}</div>${adtable}${funnel}${daily}${where}</div>`;
+  const nAds = c.run ? D.av.filter(a => a.c === c.id && a.on).length : 0;
+  const vt = `<div class='vtabs'><button class='vtab${VIEW==='num'?' sel':''}' data-v='num'>Numbers</button><button class='vtab${VIEW==='ads'?' sel':''}' data-v='ads'>Ad previews${nAds?' ('+nAds+' live)':''}</button></div>`;
+  return `<div class='card camp one'><div class='chead'><span class='ct'>${pill(headOn)}${esc(c.n)}</span><span class='cm'>${meta}</span></div>${bline}${vt}`
+    + `<div class='vpane' data-v='num'${VIEW==='num'?'':' hidden'}><div class='mks'>${k}</div>${adtable}${funnel}${daily}${where}</div>`
+    + `<div class='vpane' data-v='ads'${VIEW==='ads'?'':' hidden'}>${VIEW==='ads'?previews(c):''}</div></div>`;
 }
 
 function draw(){
@@ -417,10 +496,12 @@ function draw(){
     BD = b.dataset.t;
     document.querySelectorAll('.tabs .tab').forEach(x => x.classList.toggle('sel', x === b));
     document.querySelectorAll('.bdpane').forEach(p => p.hidden = p.dataset.t !== BD); }));
+  document.querySelectorAll('.vtab').forEach(b => b.addEventListener('click', () => {
+    VIEW = b.dataset.v; draw(); }));
   document.querySelectorAll('#camps-t tr[data-id]').forEach(tr => tr.addEventListener('click', () => {
     if (!metaCamps.some(c => c.id === tr.dataset.id)) return;
     SEL = tr.dataset.id; draw(); document.getElementById('detailtop').scrollIntoView({behavior:'smooth'}); }));
-  history.replaceState(null,'','#r='+(R.key==='custom' ? R.from+'..'+R.to : R.key)+(SEL?'&c='+SEL:''));
+  history.replaceState(null,'','#r='+(R.key==='custom' ? R.from+'..'+R.to : R.key)+(SEL?'&c='+SEL:'')+(VIEW==='ads'?'&v=ads':''));
 }
 
 document.getElementById('glance').innerHTML = glance();

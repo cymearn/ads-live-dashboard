@@ -181,6 +181,7 @@ NOTES = """<div class="card notes"><h2>How to read the campaign detail</h2><ul>
 <li><b>Reach</b> is counted per ad set. A person who saw two ad sets is counted twice, so reach is not added up.</li>
 <li><b>CTR</b> is link clicks over impressions. <b>Cost per click</b> is spend over link clicks.</li>
 <li>The date bar changes everything below the top cards. The top cards always show today, yesterday, the last 7 days, this month and all time. The page keeps the range and campaign in the link, so you can bookmark it.</li>
+<li><b>Ad previews</b> (tab inside the campaign detail) shows each ad's picture, text and button, with its spend and results for the date range. Live ads first; ads now off show only if they spent in the range. Video ads show their cover picture: use "Open Meta preview" to play them.</li>
 <li>Pick a campaign in the dropdown, or click a Meta row in the Campaigns table, to see its detail. The dropdown lists Meta campaigns with spend in the range, live ones first.</li>
 </ul></div>"""
 

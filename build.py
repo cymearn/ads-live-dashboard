@@ -118,8 +118,11 @@ def pull():
                       fields="name,effective_status,stop_time,daily_budget,lifetime_budget")
     sets = graph_all("%s/adsets" % acct, limit=500,
                      fields="name,campaign_id,effective_status,daily_budget,lifetime_budget,end_time,optimization_goal,promoted_object")
-    ads = graph_all("%s/ads" % acct, limit=500,
-                    fields="campaign_id,creative{actor_id,object_story_spec{page_id}}")
+    # Ads with their creative: used for the brand split AND the Ad previews tab.
+    ads = graph_all("%s/ads" % acct, limit=100,
+                    fields="campaign_id,adset_id,name,effective_status,preview_shareable_link,"
+                           "creative.thumbnail_width(600).thumbnail_height(600){actor_id,object_story_spec,"
+                           "title,body,image_url,thumbnail_url,video_id,call_to_action_type,asset_feed_spec}")
     rows = graph_all("%s/insights" % acct, level="campaign", time_increment=1, limit=500,
                      fields="campaign_id,spend,impressions,clicks,actions",
                      time_range=json.dumps({"since": CFG["history_since"],
@@ -131,6 +134,14 @@ def pull():
         det = {"account": graph(acct, fields="account_status,balance,currency"), "ad_life": [],
                "ad_daily": [], "bds": {t: [] for t, _, _ in meta_detail.BREAKDOWNS},
                "reach": {}, "error": True}
+    try:                                          # per-ad spend by day for the Ad previews tab
+        det["ad_ins"] = graph_all("%s/insights" % acct, level="ad", time_increment=1, limit=500,
+                                  fields="campaign_id,ad_id,spend,impressions,actions",
+                                  time_range=json.dumps({"since": CFG["history_since"],
+                                                         "until": TODAY.isoformat()}))
+    except Exception as ex:                       # previews still show, without per-ad numbers
+        print("Ad insights pull failed: %s" % str(ex)[:200])
+        det["ad_ins"], det["adErr"] = [], True
     return camps, sets, ads, rows, det
 
 
@@ -399,7 +410,13 @@ def landing():
 
 
 def main():
-    camps, sets, ads, rows, det = pull()
+    cache = os.environ.get("PULL_CACHE", "")      # local testing only: reuse one pull, spare the Meta limit
+    if cache and os.path.exists(cache):
+        camps, sets, ads, rows, det = json.load(open(cache))
+    else:
+        camps, sets, ads, rows, det = pull()
+        if cache:
+            json.dump([camps, sets, ads, rows, det], open(cache, "w"))
     rtypes = meta_detail.result_types(sets, det["ad_life"])
     mline, mwarn = meta_detail.account_banner(det["account"], CFG["currency"])
     pm = page_of_campaign(sets, ads)
@@ -416,6 +433,7 @@ def main():
         mine = [c for c in camps if brand_of(c, pm) == key]
         D = page.brand_data(key, CFG, data["table"], mine, sets, rows, det, gall.get(key), rtypes,
                             mline, mwarn, gerr, NOW, TODAY)
+        D.update(page.ad_previews(ads, det, {c["id"] for c in mine}))
         D["budgets"] = None if reg is None else [x for x in reg.get(key, []) if isinstance(x, dict)]
         out = os.path.join(HERE, "dist", key)
         os.makedirs(out, exist_ok=True)
