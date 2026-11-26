@@ -152,6 +152,16 @@ border:1px solid #2f3440;border-radius:8px;padding:6px 12px;font:inherit;font-si
 @media(max-width:860px){.kpi .v{font-size:18px}.kpi{padding:12px 12px}.selbar select{min-width:0;width:100%}
 .rangebar .custom{margin-left:0}.rangebar input{width:118px}.grid2>.card{min-width:0}.wrap{padding-left:16px;padding-right:16px}.camp.one>*:not(.chead){margin-left:14px;margin-right:14px}
 .camp.one>.chead{padding:14px}.camp p.sm{margin:0 14px 4px}.camp h4,.camp h4.big{margin-left:14px;margin-right:14px}}tr.pick{cursor:pointer}tr.pick:hover td{background:#1d2129}
+
+.bud td.nt{color:#9aa0aa;font-size:12px;white-space:normal;text-align:left;padding-top:0;border-bottom:1px solid #262a33}
+.bud tr.top td{border-bottom:0}.bud .bar{display:inline-block;width:70px;height:7px;background:#2a2e38;border-radius:9px;
+vertical-align:middle;margin-right:6px;overflow:hidden}.bud .bar i{display:block;height:100%;background:var(--acc)}
+.bud .over{color:#ff9b9b;font-weight:600}.bud .cm{color:#9aa0aa;font-size:12px}.bud .bn{font-weight:600}.budnote{color:#9aa0aa;font-size:12px;margin:10px 0 0}
+.bud details{margin-top:12px;color:#9aa0aa;font-size:13px}.bud summary{cursor:pointer}
+@media(max-width:860px){.bud table,.bud tbody,.bud tr,.bud td{display:block;width:100%}.bud thead{display:none}
+.bud tr.top{border-top:1px solid #262a33;padding-top:10px}.bud tr.top td{text-align:right;padding:4px 0;border:0}
+.bud tr.top td:first-child{text-align:left;padding-bottom:8px}.bud tr.top td[data-l]::before{content:attr(data-l);float:left;
+color:#9aa0aa;font-size:12px;text-transform:uppercase;letter-spacing:.06em}.bud td.nt{padding:6px 0 12px;border:0}.bud tr.top td{white-space:normal}}
 """
 
 JS = r"""
@@ -212,6 +222,42 @@ function sumWin(from, to){
   let s = 0;
   for (const c of D.camps) for (const r of (D.cd[c.id]||[])) if (r[0] >= from && r[0] <= to) s += r[1];
   return s;
+}
+
+// ---------- approved budgets (register kept outside the public repo; not affected by the date range)
+function budSpent(b){
+  let s = 0;
+  for (const id of (b.campaigns||[])) for (const r of (D.cd[id]||[])) s += r[1];
+  return s;
+}
+function budStatus(b){
+  const run = D.camps.some(c => (b.campaigns||[]).includes(c.id) && c.run);
+  if (run) return ['Live', true];
+  if (b.end && T > b.end) return ['Ended', false];
+  if (b.start && T < b.start) return ['Not started', false];
+  return ['Paused', false];
+}
+function budgets(){
+  if (D.budgets == null) return `<p class="empty">The approved budget register could not be read this hour. It comes back on the next update.</p>`;
+  if (!D.budgets.length) return `<p class="empty">No approved budget on record yet.</p>`;
+  const rows = D.budgets.map(b => {
+    const sp = budSpent(b), ap = +b.approved || 0, rel = b.released == null ? null : +b.released;
+    const lim = rel != null ? rel : ap, used = ap ? sp/ap*100 : 0;
+    const [st, on] = budStatus(b);
+    const over = rel != null && sp > rel + 0.005;
+    const note = [b.released_note, b.note].filter(Boolean).map(esc).join(' ');
+    return `<tr class="top"><td><span class="tag ${on?'on':'pz'}">${st}</span><span class="bn">${esc(b.name)}</span></td><td data-l="Channel">${esc(b.channel||'')}</td>`
+      + `<td data-l="Approved">${money0(ap)}</td><td data-l="Approved on">${b.approved_on?dlong(b.approved_on):'-'}${b.approved_by?'<br><span class="cm">by '+esc(b.approved_by)+'</span>':''}</td>`
+      + `<td data-l="Period">${b.start?dshort(b.start):'-'} to ${b.end?dshort(b.end)+' '+b.end.slice(0,4):'-'}</td>`
+      + `<td data-l="Released so far">${rel != null ? money0(rel) : '-'}</td><td data-l="Spent"${over?' class="over"':''}>${money(sp)}<br><span class="cm"><span class="bar"><i style="width:${Math.min(100,used).toFixed(1)}%"></i></span>${Math.round(used)}%${rel != null && rel < ap ? ' of approved spent, '+money0(ap - rel)+' not yet released' : ' used'}</span></td>`
+      + `<td data-l="Left to spend now">${st === 'Ended' ? 'None (ended)' : money(Math.max(0, lim - sp)) + (st === 'Paused' ? ' (paused)' : '')}</td></tr>`
+      + `<tr><td class="nt" colspan="8">${over?'<span class="over">Spend is above the released limit. </span>':''}${note}</td></tr>`;
+  }).join('');
+  const covered = new Set(D.budgets.flatMap(b => b.campaigns||[]));
+  const loose = D.camps.filter(c => !covered.has(c.id) && (D.cd[c.id]||[]).some(r => r[1] > 0));
+  const looseHtml = loose.length ? `<details><summary>${loose.length} campaign${loose.length>1?'s':''} with spend have no approved budget on record (older flights). Tell the marketing team the approved amount to add it.</summary><p>${loose.map(c => esc(c.n)+' ('+money(budSpent({campaigns:[c.id]}))+')').join('<br>')}</p></details>` : '';
+  return `<table><thead><tr><th>Approved budget</th><th>Channel</th><th>Approved</th><th>Approved on</th><th>Period</th><th>Released so far</th><th>Spent</th><th>Left to spend now</th></tr></thead><tbody>${rows}</tbody></table>`
+    + `<p class="budnote">Spent = all spend on the campaigns linked to that budget, from the same data as the rest of this page. Released so far = the part of the approved amount that is open to spend now (tranches). The approved amounts come from management approvals. The ad platforms do not hold them. Unspent money on ended or paused budgets is not available unless management re-approves it.</p>${looseHtml}`;
 }
 
 // ---------- blocks
@@ -341,7 +387,9 @@ function section(c){
 
   const meta = rt ? `Spend ${money(tot.sp)} · ${num(res)} ${rl.toLowerCase()} · ${res?money(tot.sp/res):'-'} per ${rl.toLowerCase().replace(/s$/,'')}` : `Spend ${money(tot.sp)}`;
   const headOn = c.run || (!ok && live.some(x => x.on));
-  return `<div class='card camp one'><div class='chead'><span class='ct'>${pill(headOn)}${esc(c.n)}</span><span class='cm'>${meta}</span></div><div class='mks'>${k}</div>${adtable}${funnel}${daily}${where}</div>`;
+  const bb = (D.budgets||[]).find(b => (b.campaigns||[]).includes(c.id));
+  const bline = bb ? `<p class='sm'>Approved budget: <b>${money0(+bb.approved||0)}</b> for ${esc(bb.name)}${bb.released!=null?', released so far '+money0(+bb.released):''}. See Approved budgets at the top.</p>` : `<p class='sm'>No approved budget on record for this campaign.</p>`;
+  return `<div class='card camp one'><div class='chead'><span class='ct'>${pill(headOn)}${esc(c.n)}</span><span class='cm'>${meta}</span></div>${bline}<div class='mks'>${k}</div>${adtable}${funnel}${daily}${where}</div>`;
 }
 
 function draw(){
@@ -376,6 +424,7 @@ function draw(){
 }
 
 document.getElementById('glance').innerHTML = glance();
+document.getElementById('budgets').innerHTML = budgets();
 document.querySelectorAll('.rangebar button').forEach(b => b.addEventListener('click', () => setRange(b.dataset.k)));
 document.getElementById('campsel').addEventListener('change', e => { SEL = e.target.value; draw(); });
 const fromI = document.getElementById('from'), toI = document.getElementById('to');
@@ -404,6 +453,7 @@ def html_page(D, base_css):
 <div class="stale" id="stale">This page has not updated for more than 3 hours. The numbers can be old. See HANDOVER.md, section "If the page stops updating".</div>
 %(mwarn)s%(gwarn)s
 <p class="glance">At a glance (not affected by the date range)</p><div class="kpis" id="glance"></div>
+<div class="card scroll bud"><h2>Approved budgets (not affected by the date range)</h2><div id="budgets"></div></div>
 <div class="rangebar"><span class="lab">Date range</span>%(buttons)s
 <span class="custom">From <input type="date" id="from"> to <input type="date" id="to"></span></div>
 <p class="rangenow" id="rangenow"></p>

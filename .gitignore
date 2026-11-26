@@ -7,3 +7,4 @@ setup_github.sh
 set_google_secrets.sh
 .wrangler/
 node_modules/
+budgets.json

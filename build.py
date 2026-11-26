@@ -51,6 +51,23 @@ def token():
 TOKEN = token()
 
 
+def budgets():
+    """Approved budget register: $BUDGETS_JSON (GitHub secret), else local budgets.json.
+    Kept out of git because the repo is public. Missing register = page says so, build goes on."""
+    raw = os.environ.get("BUDGETS_JSON", "").strip()
+    if not raw:
+        local = os.path.join(HERE, "budgets.json")
+        if os.path.exists(local):
+            raw = open(local).read()
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except ValueError:
+        print("BUDGETS_JSON is not valid JSON; approved budgets left out")
+        return None
+
+
 def graph(path, **params):
     params["access_token"] = TOKEN
     url = "https://graph.facebook.com/%s/%s?%s" % (
@@ -393,11 +410,13 @@ def main():
         gerr = str(ex)
         print("Google pull failed: %s" % gerr[:200])
     os.makedirs(os.path.join(HERE, "dist"), exist_ok=True)
+    reg = budgets()
     for key in CFG["brands"]:
         data = build_brand(key, camps, sets, pm, rows, gall.get(key), rtypes)
         mine = [c for c in camps if brand_of(c, pm) == key]
         D = page.brand_data(key, CFG, data["table"], mine, sets, rows, det, gall.get(key), rtypes,
                             mline, mwarn, gerr, NOW, TODAY)
+        D["budgets"] = None if reg is None else [x for x in reg.get(key, []) if isinstance(x, dict)]
         out = os.path.join(HERE, "dist", key)
         os.makedirs(out, exist_ok=True)
         with open(os.path.join(out, "index.html"), "w") as f:

@@ -28,6 +28,7 @@ No computer needs to stay on. Nothing runs on a laptop.
 | GitHub repository | `github.com/<owner>/ads-live-dashboard` | A company GitHub organisation, not a person |
 | `META_TOKEN` | Repository > Settings > Secrets and variables > Actions | System user token from the Meta business portfolio |
 | `PW_LSAA`, `PW_CREATORCITY` | Same place | The page passwords |
+| `BUDGETS_JSON` | Same place | The approved budget register (copy of the local `budgets.json`) |
 | `GOOGLE_ADS_DEVELOPER_TOKEN`, `GOOGLE_ADS_CLIENT_ID`, `GOOGLE_ADS_CLIENT_SECRET`, `GOOGLE_ADS_REFRESH_TOKEN`, `GOOGLE_ADS_LOGIN_CUSTOMER_ID` | Same place | Google Ads API keys. The refresh token belongs to the Google login that made it. Replace it with one from a company login before that person leaves (see below) |
 | Cloudflare account + worker `ads-dashboard-timer` | dash.cloudflare.com > Workers | A company Cloudflare account |
 | `GH_TOKEN` (Cloudflare worker secret) | Cloudflare > worker > Settings > Variables | GitHub fine-grained token, Actions read and write on this repository only. It expires: make a new one before the date shown in GitHub |
@@ -55,6 +56,12 @@ The Google refresh token is different: it belongs to the person who made it. If 
 None. The pages update by themselves.
 
 ## Common changes
+
+**Add or change an approved budget.** Each page has an "Approved budgets" box: the amount management approved, the date, who approved it, the period, the part released so far (tranches), the spend so far on the linked campaigns, and what is left. The approved amounts do not come from Meta or Google, so they live in a register: `budgets.json` (one list per brand). The repository is public, so this file is NOT in git. A copy lives in the secret `BUDGETS_JSON`.
+1. Edit `budgets.json`. One entry per approval: `name`, `channel`, `approved` (MYR), `approved_on`, `approved_by`, `start`, `end`, `released` (or `null`), `released_note`, `campaigns` (Meta campaign ids; Google ids start with `g`), `note`.
+2. Run `./set_budgets_secret.sh`. It checks the file, updates the secret and starts an update.
+3. A new owner who does not have the local file: copy the entries from the page into a new `budgets.json`.
+Campaigns with spend but no approval on record are listed under the box, so missing entries are easy to see.
 
 **Change a password.** Settings > Secrets and variables > Actions > edit `PW_LSAA` or `PW_CREATORCITY`. Then Actions > Update dashboards > Run workflow. Old saved logins stop working.
 
